@@ -1,9 +1,26 @@
 
 import { GoogleGenAI, Type } from "@google/genai";
 
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+/**
+ * Lấy API_KEY an toàn từ môi trường
+ */
+const getApiKey = (): string => {
+  try {
+    return (typeof process !== 'undefined' && process.env) ? process.env.API_KEY || '' : '';
+  } catch {
+    return '';
+  }
+};
+
+const apiKey = getApiKey();
+const ai = new GoogleGenAI({ apiKey });
 
 export const estimateDeviceValue = async (brand: string, model: string, condition: string) => {
+  if (!apiKey) {
+    console.error("Gemini API Key missing. AI valuation disabled.");
+    return null;
+  }
+
   try {
     const response = await ai.models.generateContent({
       model: 'gemini-3-flash-preview',

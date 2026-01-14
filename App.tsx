@@ -22,45 +22,54 @@ const App: React.FC = () => {
   // FETCH DATA
   const fetchContracts = async () => {
     setIsLoading(true);
-    
-    if (isSupabaseConfigured && supabase) {
-      // CLOUD MODE
-      const { data, error } = await supabase
-        .from('contracts')
-        .select('*')
-        .order('created_at', { ascending: false });
-      
-      if (error) {
-        console.error('Error fetching from Supabase:', error);
-      } else if (data) {
-        const mappedData: Contract[] = data.map((item: any) => ({
-          id: item.id,
-          customer: { id: item.id, name: item.customer_name, phone: item.customer_phone, idCard: item.customer_id_card },
-          device: { brand: item.device_brand, model: item.device_model, imei: item.device_imei, condition: item.device_condition, estimatedValue: 0 },
-          loanAmount: Number(item.loan_amount),
-          interestRate: Number(item.interest_rate),
-          interestType: item.interest_type,
-          startDate: item.start_date,
-          dueDate: item.due_date,
-          status: item.status as ContractStatus,
-          isNoPaper: item.is_no_paper,
-          notes: item.notes,
-          payments: item.payments || [],
-          residualInterest: Number(item.residual_interest || 0),
-          lastInterestPaidDate: item.last_interest_paid_date
-        }));
-        setContracts(mappedData);
-      }
-    } else {
-      // LOCAL MODE FALLBACK
-      const localData = localStorage.getItem(LOCAL_DATA_KEY);
-      if (localData) {
-        setContracts(JSON.parse(localData));
+    try {
+      if (isSupabaseConfigured && supabase) {
+        // CLOUD MODE
+        const { data, error } = await supabase
+          .from('contracts')
+          .select('*')
+          .order('created_at', { ascending: false });
+        
+        if (error) {
+          throw error;
+        } else if (data) {
+          const mappedData: Contract[] = data.map((item: any) => ({
+            id: item.id,
+            customer: { id: item.id, name: item.customer_name, phone: item.customer_phone, idCard: item.customer_id_card },
+            device: { brand: item.device_brand, model: item.device_model, imei: item.device_imei, condition: item.device_condition, estimatedValue: 0 },
+            loanAmount: Number(item.loan_amount),
+            interestRate: Number(item.interest_rate),
+            interestType: item.interest_type,
+            startDate: item.start_date,
+            dueDate: item.due_date,
+            status: item.status as ContractStatus,
+            isNoPaper: item.is_no_paper,
+            notes: item.notes,
+            payments: item.payments || [],
+            residualInterest: Number(item.residual_interest || 0),
+            lastInterestPaidDate: item.last_interest_paid_date
+          }));
+          setContracts(mappedData);
+        }
       } else {
-        setContracts([]);
+        // LOCAL MODE FALLBACK
+        const localData = localStorage.getItem(LOCAL_DATA_KEY);
+        if (localData) {
+          try {
+            setContracts(JSON.parse(localData));
+          } catch (e) {
+            console.error("Lỗi parse dữ liệu LocalStorage:", e);
+            setContracts([]);
+          }
+        } else {
+          setContracts([]);
+        }
       }
+    } catch (err) {
+      console.error("Lỗi khi tải dữ liệu:", err);
+    } finally {
+      setIsLoading(false);
     }
-    setIsLoading(false);
   };
 
   useEffect(() => {
@@ -69,7 +78,11 @@ const App: React.FC = () => {
 
   const saveLocalContracts = (updated: Contract[]) => {
     setContracts(updated);
-    localStorage.setItem(LOCAL_DATA_KEY, JSON.stringify(updated));
+    try {
+      localStorage.setItem(LOCAL_DATA_KEY, JSON.stringify(updated));
+    } catch (e) {
+      console.error("Lỗi khi lưu dữ liệu LocalStorage:", e);
+    }
   };
 
   const [view, setView] = useState<'dashboard' | 'contracts' | 'add' | 'customers' | 'customer_history' | 'overdue'>('dashboard');
@@ -95,16 +108,28 @@ const App: React.FC = () => {
   const [showAdvanced, setShowAdvanced] = useState(false);
 
   const [formInterestRate, setFormInterestRate] = useState(() => {
-    const saved = localStorage.getItem(CONFIG_KEY);
-    return saved ? JSON.parse(saved).rate : '3000';
+    try {
+      const saved = localStorage.getItem(CONFIG_KEY);
+      return saved ? JSON.parse(saved).rate : '3000';
+    } catch {
+      return '3000';
+    }
   });
   const [formInterestType, setFormInterestType] = useState<'ngày' | 'tháng'>(() => {
-    const saved = localStorage.getItem(CONFIG_KEY);
-    return saved ? JSON.parse(saved).type : 'ngày';
+    try {
+      const saved = localStorage.getItem(CONFIG_KEY);
+      return saved ? JSON.parse(saved).type : 'ngày';
+    } catch {
+      return 'ngày';
+    }
   });
   const [formDuration, setFormDuration] = useState(() => {
-    const saved = localStorage.getItem(CONFIG_KEY);
-    return saved ? JSON.parse(saved).duration : '30';
+    try {
+      const saved = localStorage.getItem(CONFIG_KEY);
+      return saved ? JSON.parse(saved).duration : '30';
+    } catch {
+      return '30';
+    }
   });
 
   useEffect(() => {
@@ -137,25 +162,13 @@ const App: React.FC = () => {
     return uniqueCustomers.filter(c => removeDiacritics(c.name).includes(removeDiacritics(formCustomerName)) || c.phone.includes(formCustomerName)).slice(0, 5);
   }, [formCustomerName, uniqueCustomers]);
 
-  const previousItemsForSelectedCustomer = useMemo(() => {
-    if (!formCustomerName) return [];
-    const items = new Map<string, { brand: string, model: string, loan: number }>();
-    contracts.filter(c => removeDiacritics(c.customer.name) === removeDiacritics(formCustomerName)).forEach(c => {
-      const key = `${c.device.brand}_${c.device.model}`;
-      if (!items.has(key)) items.set(key, { brand: c.device.brand, model: c.device.model, loan: c.loanAmount });
-    });
-    return Array.from(items.values());
-  }, [formCustomerName, contracts]);
-
-  const handleSelectPreviousItem = (item: { brand: string, model: string, loan: number }) => {
-    setFormBrand(item.brand);
-    setFormModel(item.model);
-    if (parseNumber(formLoanAmount) === 0) setFormLoanAmount(formatNumber(item.loan));
-  };
-
   const clearForm = () => {
-    const savedConfig = localStorage.getItem(CONFIG_KEY);
-    const config = savedConfig ? JSON.parse(savedConfig) : { rate: '3000', type: 'ngày', duration: '30' };
+    const savedConfigString = localStorage.getItem(CONFIG_KEY);
+    let config = { rate: '3000', type: 'ngày', duration: '30' };
+    try {
+      if (savedConfigString) config = JSON.parse(savedConfigString);
+    } catch {}
+    
     setEditingContractId(null);
     setFormBrand('Apple');
     setFormModel('');
@@ -169,7 +182,7 @@ const App: React.FC = () => {
     setFormNotes('');
     setFormStartDate(new Date().toISOString().split('T')[0]);
     setFormInterestRate(config.rate);
-    setFormInterestType(config.type);
+    setFormInterestType(config.type as 'ngày' | 'tháng');
     setFormDuration(config.duration);
     setShowAdvanced(false);
   };
@@ -468,7 +481,9 @@ const App: React.FC = () => {
 
         {!isLoading && (view === 'contracts' || view === 'customer_history' || view === 'overdue') && (
           <div className="space-y-4 pb-8 animate-in fade-in duration-300">
-            {filteredContracts.map(c => {
+            {filteredContracts.length === 0 ? (
+              <div className="text-center py-20 text-slate-400 font-bold uppercase text-[10px] tracking-widest">Không có dữ liệu</div>
+            ) : filteredContracts.map(c => {
               const interest = calculateInterest(c.loanAmount, c.interestRate, c.startDate, c.interestType, c.lastInterestPaidDate, c.residualInterest);
               const overdueDays = calculateDaysBetween(c.dueDate);
               const isOverdue = overdueDays > 0 && c.status !== ContractStatus.REDEEMED && c.status !== ContractStatus.LIQUIDATED;
@@ -488,12 +503,6 @@ const App: React.FC = () => {
                       <div className="flex flex-col text-right"><span className="text-[8px] font-black text-emerald-500 uppercase tracking-widest">Tiền Lãi</span><span className="text-lg font-black text-emerald-600">{formatVND(interest)}</span></div>
                     </div>
                   </div>
-                  {(c.status === ContractStatus.ACTIVE || c.status === ContractStatus.OVERDUE) && (
-                    <div className="flex border-t border-slate-100 divide-x divide-slate-100">
-                      <button onClick={(e) => { e.stopPropagation(); setQuickActionModal({ type: 'interest', contract: c }); }} className="flex-1 py-3.5 flex items-center justify-center gap-2 text-[10px] font-black text-emerald-600 uppercase tracking-widest hover:bg-emerald-50"><Receipt className="w-3.5 h-3.5" /> Đóng lãi</button>
-                      <button onClick={(e) => { e.stopPropagation(); setQuickActionModal({ type: 'redeem', contract: c }); }} className="flex-1 py-3.5 flex items-center justify-center gap-2 text-[10px] font-black text-blue-600 uppercase tracking-widest hover:bg-blue-50"><CheckCircle className="w-3.5 h-3.5" /> Chuộc máy</button>
-                    </div>
-                  )}
                 </div>
               );
             })}
@@ -543,12 +552,6 @@ const App: React.FC = () => {
                       <div className="space-y-4 pt-4 animate-in fade-in duration-300">
                         <div className="grid grid-cols-2 gap-3"><div className="space-y-1"><label className="text-[9px] font-black text-slate-400 uppercase">SĐT KHÁCH</label><input value={formCustomerPhone} onChange={(e) => setFormCustomerPhone(e.target.value)} type="tel" className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none font-bold text-sm" /></div><div className="space-y-1"><label className="text-[9px] font-black text-slate-400 uppercase">LÃI (K/1TR)</label><input value={formInterestRate} onChange={(e) => setFormInterestRate(e.target.value)} type="number" className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none font-bold text-sm" /></div></div>
                         <div className="grid grid-cols-2 gap-3"><div className="space-y-1"><label className="text-[9px] font-black text-slate-400 uppercase">HẠN (NGÀY)</label><input value={formDuration} onChange={(e) => setFormDuration(e.target.value)} type="number" className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none font-bold text-sm" /></div><div className="space-y-1"><label className="text-[9px] font-black text-slate-400 uppercase">NGÀY CẦM</label><input value={formStartDate} onChange={(e) => setFormStartDate(e.target.value)} type="date" className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none font-bold text-xs" /></div></div>
-                        <div className={`p-3 rounded-xl border flex items-center gap-2 ${isSupabaseConfigured ? 'bg-emerald-50 border-emerald-100' : 'bg-amber-50 border-amber-100'}`}>
-                          {isSupabaseConfigured ? <Save className="w-3 h-3 text-emerald-600" /> : <Database className="w-3 h-3 text-amber-600" />}
-                          <span className={`text-[9px] font-bold ${isSupabaseConfigured ? 'text-emerald-700' : 'text-amber-700'}`}>
-                            {isSupabaseConfigured ? 'VerPro Cloud: Dữ liệu tự động đồng bộ.' : 'Local Mode: Dữ liệu chỉ lưu trên trình duyệt.'}
-                          </span>
-                        </div>
                       </div>
                     )}
                   </div>
@@ -567,38 +570,6 @@ const App: React.FC = () => {
         <button onClick={() => setView('customers')} className={`flex flex-col items-center gap-1 flex-1 ${view === 'customers' ? 'text-emerald-500' : 'text-slate-400'}`}><Users className="w-6 h-6" /><span className="text-[9px] font-black uppercase">Khách</span></button>
       </nav>
 
-      {quickActionModal.contract && (
-        <div className="fixed inset-0 z-50 flex flex-col justify-end bg-slate-900/60 backdrop-blur-sm p-4">
-          <div className="bg-white w-full rounded-[3rem] shadow-2xl overflow-hidden animate-in slide-in-from-bottom duration-300 max-h-[90vh] flex flex-col">
-            <div className="flex items-center justify-between p-8 pb-4 sticky top-0 bg-white z-10"><div className="flex items-center gap-3"><div className="w-3 h-10 bg-emerald-500 rounded-full"></div><div><h3 className="text-2xl font-black text-slate-800 tracking-tight leading-none mb-1">{quickActionModal.type === 'interest' ? 'Đóng Tiền Lãi' : quickActionModal.type === 'redeem' ? 'Chuộc Máy' : 'Thông Tin Hợp Đồng'}</h3><p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">{quickActionModal.contract.id}</p></div></div><button onClick={() => setQuickActionModal({ type: 'details', contract: null })} className="p-3 bg-slate-100 rounded-full"><X className="w-6 h-6 text-slate-400" /></button></div>
-            <div className="px-8 pb-12 overflow-y-auto flex-1 no-scrollbar">
-              {quickActionModal.type === 'details' && (
-                <div className="space-y-8 pt-4">
-                  <div className="grid grid-cols-2 gap-4"><div className="bg-emerald-50 p-5 rounded-[2rem] border border-emerald-100"><p className="text-[10px] font-black text-emerald-600 uppercase mb-2">Tiền gốc hiện tại</p><p className="text-2xl font-black text-emerald-700">{formatVND(quickActionModal.contract.loanAmount)}</p></div><div className="bg-amber-50 p-5 rounded-[2rem] border border-amber-100"><p className="text-[10px] font-black text-amber-600 uppercase mb-2">Lãi đến hôm nay</p><p className="text-2xl font-black text-amber-700">{formatVND(calculateInterest(quickActionModal.contract.loanAmount, quickActionModal.contract.interestRate, quickActionModal.contract.startDate, quickActionModal.contract.interestType, quickActionModal.contract.lastInterestPaidDate, quickActionModal.contract.residualInterest))}</p></div></div>
-                  <div className="bg-slate-50 rounded-[2rem] p-6 border border-slate-100"><div className="flex items-center justify-between mb-4"><div className="flex items-center gap-3"><Smartphone className="w-6 h-6 text-slate-800" /><p className="text-lg font-black text-slate-800">{quickActionModal.contract.device.model}</p></div><StatusBadge status={quickActionModal.contract.status} /></div>
-                    <div className="grid grid-cols-2 gap-y-4 text-xs font-bold text-slate-600"><p><span className="text-slate-400 font-bold uppercase text-[9px] block mb-1">Ngày cầm</span> {formatDate(quickActionModal.contract.startDate)}</p><p><span className="text-slate-400 font-bold uppercase text-[9px] block mb-1">Đáo hạn</span> {formatDate(quickActionModal.contract.dueDate)}</p><p><span className="text-slate-400 font-bold uppercase text-[9px] block mb-1">Lãi suất</span> {quickActionModal.contract.interestRate}k / 1tr</p><p><span className="text-slate-400 font-bold uppercase text-[9px] block mb-1">Giấy tờ</span> {quickActionModal.contract.isNoPaper ? 'Ko giấy' : 'Có giấy'}</p></div>
-                  </div>
-                  <div className="space-y-3 pt-4 pb-10"><div className="grid grid-cols-2 gap-3"><button onClick={() => setQuickActionModal({ ...quickActionModal, type: 'interest' })} className="py-4.5 bg-emerald-500 text-white font-black rounded-2xl uppercase text-xs flex items-center justify-center gap-2 shadow-lg"><Receipt className="w-4 h-4" /> Đóng lãi gia hạn</button><button onClick={() => setQuickActionModal({ ...quickActionModal, type: 'redeem' })} className="py-4.5 bg-blue-500 text-white font-black rounded-2xl uppercase text-xs flex items-center justify-center gap-2 shadow-lg"><CheckCircle className="w-4 h-4" /> Chuộc máy</button></div>
-                    <div className="grid grid-cols-3 gap-2 pt-2"><button onClick={() => startEditing(quickActionModal.contract!)} className="py-3 bg-slate-100 text-slate-600 font-black rounded-xl uppercase text-[9px] flex items-center justify-center gap-1 active:bg-slate-200"><Edit2 className="w-3 h-3" /> Sửa</button><button onClick={() => handleStatusUpdate(quickActionModal.contract!.id, ContractStatus.LIQUIDATED)} className="py-3 bg-amber-50 text-amber-600 font-black rounded-xl uppercase text-[9px] border active:bg-amber-100"><TrendingDown className="w-3 h-3" /> T.Lý</button><button onClick={() => deleteContract(quickActionModal.contract!.id)} className="py-3 bg-rose-50 text-rose-600 font-black rounded-xl uppercase text-[9px] border active:bg-rose-100"><Trash2 className="w-3 h-3" /> Xóa HD</button></div>
-                  </div>
-                </div>
-              )}
-              {quickActionModal.type === 'interest' && (
-                <div className="space-y-6 pt-4"><div className="bg-emerald-50 p-8 rounded-[2.5rem] border border-emerald-100 text-center"><p className="text-[10px] font-black text-emerald-600 uppercase mb-2">Số lãi dự kiến cần thu</p><h4 className="text-4xl font-black text-emerald-700">{formatVND(calculateInterest(quickActionModal.contract!.loanAmount, quickActionModal.contract!.interestRate, quickActionModal.contract!.startDate, quickActionModal.contract!.interestType, quickActionModal.contract!.lastInterestPaidDate, quickActionModal.contract!.residualInterest))}</h4></div>
-                  <div className="space-y-3 px-4"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block pl-2">Số tiền khách đóng thực tế</label><input autoFocus value={interestPaidAmount} onChange={(e) => setInterestPaidAmount(formatNumber(Number(e.target.value.replace(/\D/g, ""))))} className="w-full px-8 py-6 bg-slate-900 border-none rounded-[2rem] outline-none font-black text-white text-4xl text-center focus:ring-4 focus:ring-emerald-500/20" /></div>
-                  <div className="flex gap-4 pt-4 pb-12"><button onClick={() => setQuickActionModal({ ...quickActionModal, type: 'details' })} className="flex-1 py-5 bg-slate-100 text-slate-400 font-black rounded-3xl uppercase tracking-widest text-sm">Hủy</button><button onClick={() => handlePayInterest(quickActionModal.contract!.id)} className="flex-[2] py-5 bg-emerald-500 text-white font-black rounded-3xl uppercase tracking-widest shadow-xl text-sm active:scale-95 transition-transform">Xác nhận Lưu trữ</button></div>
-                </div>
-              )}
-              {quickActionModal.type === 'redeem' && (
-                <div className="space-y-8 pt-4"><div className="py-12 bg-blue-50 rounded-[3rem] border border-blue-100 text-center px-6"><p className="text-[10px] font-black text-blue-600 uppercase tracking-widest mb-3">Tổng cộng thanh toán để chuộc</p><h4 className="text-5xl font-black text-blue-700">{formatVND(quickActionModal.contract!.loanAmount + calculateInterest(quickActionModal.contract!.loanAmount, quickActionModal.contract!.interestRate, quickActionModal.contract!.startDate, quickActionModal.contract!.interestType, quickActionModal.contract!.lastInterestPaidDate, quickActionModal.contract!.residualInterest))}</h4></div>
-                  <div className="flex gap-4 pb-12"><button onClick={() => setQuickActionModal({ ...quickActionModal, type: 'details' })} className="flex-1 py-5 bg-slate-100 text-slate-400 font-black rounded-3xl uppercase tracking-widest text-sm">Quay lại</button><button onClick={() => handleStatusUpdate(quickActionModal.contract!.id, ContractStatus.REDEEMED)} className="flex-[2] py-5 bg-blue-500 text-white font-black rounded-3xl uppercase tracking-widest shadow-xl text-sm active:scale-95 transition-transform">Xác nhận Chuộc</button></div>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-      
       <style>{`.no-scrollbar::-webkit-scrollbar { display: none; }.no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }.pb-safe { padding-bottom: env(safe-area-inset-bottom); }.py-4.5 { padding-top: 1.125rem; padding-bottom: 1.125rem; }`}</style>
     </div>
   );
