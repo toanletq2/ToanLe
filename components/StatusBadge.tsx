@@ -1,6 +1,6 @@
 
 import React from 'react';
-import { ContractStatus } from '../types';
+import { ContractStatus } from '../types.ts';
 import { Clock, AlertTriangle, CheckCircle, TrendingDown, HelpCircle } from 'lucide-react';
 
 interface StatusBadgeProps {

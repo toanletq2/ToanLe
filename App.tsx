@@ -6,11 +6,11 @@ import {
   ArrowLeft, DollarSign, Trash2, TrendingDown, TrendingUp, ChevronRight, 
   Receipt, Phone, Calendar, X, Save, Activity, Star, RefreshCw, Cloud, Database
 } from 'lucide-react';
-import { Contract, ContractStatus, Customer, PaymentType, Payment } from './types';
-import { formatVND, formatDate, calculateInterest, calculateDaysBetween, formatNumber, parseNumber, removeDiacritics } from './utils/formatters';
-import StatusBadge from './components/StatusBadge';
-import { estimateDeviceValue } from './services/geminiService';
-import { supabase, isSupabaseConfigured } from './services/supabaseClient';
+import { Contract, ContractStatus, Customer, PaymentType, Payment } from './types.ts';
+import { formatVND, formatDate, calculateInterest, calculateDaysBetween, formatNumber, parseNumber, removeDiacritics } from './utils/formatters.ts';
+import StatusBadge from './components/StatusBadge.tsx';
+import { estimateDeviceValue } from './services/geminiService.ts';
+import { supabase, isSupabaseConfigured } from './services/supabaseClient.ts';
 
 const CONFIG_KEY = 'pawn_config_v1';
 const LOCAL_DATA_KEY = 'pawn_contracts_local_v1';
@@ -32,7 +32,6 @@ const App: React.FC = () => {
       
       if (error) {
         console.error('Error fetching from Supabase:', error);
-        // Optional: fallback to local on error
       } else if (data) {
         const mappedData: Contract[] = data.map((item: any) => ({
           id: item.id,
@@ -232,7 +231,6 @@ const App: React.FC = () => {
       }
       fetchContracts();
     } else {
-      // LOCAL MODE LOGIC
       const newContract: Contract = {
         id: editingContractId || `HD-${Math.floor(1000 + Math.random() * 9000)}`,
         customer: { id: '', name: formCustomerName, phone: formCustomerPhone, idCard: formCustomerIdCard },
@@ -561,7 +559,6 @@ const App: React.FC = () => {
         )}
       </main>
 
-      {/* FOOTER NAV */}
       <nav className="fixed bottom-0 left-0 right-0 bg-white border-t border-slate-200 px-2 py-2 flex items-center justify-around z-40 shadow-[0_-4px_20px_rgba(0,0,0,0.05)] pb-safe">
         <button onClick={() => setView('dashboard')} className={`flex flex-col items-center gap-1 flex-1 ${view === 'dashboard' ? 'text-emerald-500' : 'text-slate-400'}`}><LayoutDashboard className="w-6 h-6" /><span className="text-[9px] font-black uppercase">Home</span></button>
         <button onClick={() => { setView('contracts'); setStatusFilter('ALL'); }} className={`flex flex-col items-center gap-1 flex-1 ${view === 'contracts' ? 'text-emerald-500' : 'text-slate-400'}`}><History className="w-6 h-6" /><span className="text-[9px] font-black uppercase">Sổ Cầm</span></button>
@@ -570,7 +567,6 @@ const App: React.FC = () => {
         <button onClick={() => setView('customers')} className={`flex flex-col items-center gap-1 flex-1 ${view === 'customers' ? 'text-emerald-500' : 'text-slate-400'}`}><Users className="w-6 h-6" /><span className="text-[9px] font-black uppercase">Khách</span></button>
       </nav>
 
-      {/* QUICK ACTION DRAWER (Remains same logic but uses safe database flag) */}
       {quickActionModal.contract && (
         <div className="fixed inset-0 z-50 flex flex-col justify-end bg-slate-900/60 backdrop-blur-sm p-4">
           <div className="bg-white w-full rounded-[3rem] shadow-2xl overflow-hidden animate-in slide-in-from-bottom duration-300 max-h-[90vh] flex flex-col">
@@ -587,7 +583,6 @@ const App: React.FC = () => {
                   </div>
                 </div>
               )}
-              {/* Other Modal sub-views (interest, redeem) would follow the same pattern - they already call handlePayInterest or handleStatusUpdate which we fixed above */}
               {quickActionModal.type === 'interest' && (
                 <div className="space-y-6 pt-4"><div className="bg-emerald-50 p-8 rounded-[2.5rem] border border-emerald-100 text-center"><p className="text-[10px] font-black text-emerald-600 uppercase mb-2">Số lãi dự kiến cần thu</p><h4 className="text-4xl font-black text-emerald-700">{formatVND(calculateInterest(quickActionModal.contract!.loanAmount, quickActionModal.contract!.interestRate, quickActionModal.contract!.startDate, quickActionModal.contract!.interestType, quickActionModal.contract!.lastInterestPaidDate, quickActionModal.contract!.residualInterest))}</h4></div>
                   <div className="space-y-3 px-4"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block pl-2">Số tiền khách đóng thực tế</label><input autoFocus value={interestPaidAmount} onChange={(e) => setInterestPaidAmount(formatNumber(Number(e.target.value.replace(/\D/g, ""))))} className="w-full px-8 py-6 bg-slate-900 border-none rounded-[2rem] outline-none font-black text-white text-4xl text-center focus:ring-4 focus:ring-emerald-500/20" /></div>
