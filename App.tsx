@@ -4,49 +4,62 @@ import {
   LayoutDashboard, PlusCircle, Search, Smartphone, Users, AlertTriangle, 
   CheckCircle, Clock, History, User, Zap, Tag, Edit2, ChevronUp, ChevronDown, 
   ArrowLeft, DollarSign, Trash2, TrendingDown, TrendingUp, ChevronRight, 
-  Receipt, Phone, Calendar, X, Save, Activity, Star, RefreshCw
+  Receipt, Phone, Calendar, X, Save, Activity, Star, RefreshCw, Cloud, Database
 } from 'lucide-react';
 import { Contract, ContractStatus, Customer, PaymentType, Payment } from './types';
 import { formatVND, formatDate, calculateInterest, calculateDaysBetween, formatNumber, parseNumber, removeDiacritics } from './utils/formatters';
 import StatusBadge from './components/StatusBadge';
 import { estimateDeviceValue } from './services/geminiService';
-import { supabase } from './services/supabaseClient';
+import { supabase, isSupabaseConfigured } from './services/supabaseClient';
 
 const CONFIG_KEY = 'pawn_config_v1';
+const LOCAL_DATA_KEY = 'pawn_contracts_local_v1';
 
 const App: React.FC = () => {
   const [contracts, setContracts] = useState<Contract[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
-  // FETCH DATA FROM SUPABASE
+  // FETCH DATA
   const fetchContracts = async () => {
     setIsLoading(true);
-    const { data, error } = await supabase
-      .from('contracts')
-      .select('*')
-      .order('created_at', { ascending: false });
     
-    if (error) {
-      console.error('Error fetching:', error);
-    } else if (data) {
-      // Map database fields back to our UI model
-      const mappedData: Contract[] = data.map((item: any) => ({
-        id: item.id,
-        customer: { id: item.id, name: item.customer_name, phone: item.customer_phone, idCard: item.customer_id_card },
-        device: { brand: item.device_brand, model: item.device_model, imei: item.device_imei, condition: item.device_condition, estimatedValue: 0 },
-        loanAmount: Number(item.loan_amount),
-        interestRate: Number(item.interest_rate),
-        interestType: item.interest_type,
-        startDate: item.start_date,
-        dueDate: item.due_date,
-        status: item.status as ContractStatus,
-        isNoPaper: item.is_no_paper,
-        notes: item.notes,
-        payments: item.payments || [],
-        residualInterest: Number(item.residual_interest || 0),
-        lastInterestPaidDate: item.last_interest_paid_date
-      }));
-      setContracts(mappedData);
+    if (isSupabaseConfigured && supabase) {
+      // CLOUD MODE
+      const { data, error } = await supabase
+        .from('contracts')
+        .select('*')
+        .order('created_at', { ascending: false });
+      
+      if (error) {
+        console.error('Error fetching from Supabase:', error);
+        // Optional: fallback to local on error
+      } else if (data) {
+        const mappedData: Contract[] = data.map((item: any) => ({
+          id: item.id,
+          customer: { id: item.id, name: item.customer_name, phone: item.customer_phone, idCard: item.customer_id_card },
+          device: { brand: item.device_brand, model: item.device_model, imei: item.device_imei, condition: item.device_condition, estimatedValue: 0 },
+          loanAmount: Number(item.loan_amount),
+          interestRate: Number(item.interest_rate),
+          interestType: item.interest_type,
+          startDate: item.start_date,
+          dueDate: item.due_date,
+          status: item.status as ContractStatus,
+          isNoPaper: item.is_no_paper,
+          notes: item.notes,
+          payments: item.payments || [],
+          residualInterest: Number(item.residual_interest || 0),
+          lastInterestPaidDate: item.last_interest_paid_date
+        }));
+        setContracts(mappedData);
+      }
+    } else {
+      // LOCAL MODE FALLBACK
+      const localData = localStorage.getItem(LOCAL_DATA_KEY);
+      if (localData) {
+        setContracts(JSON.parse(localData));
+      } else {
+        setContracts([]);
+      }
     }
     setIsLoading(false);
   };
@@ -55,12 +68,16 @@ const App: React.FC = () => {
     fetchContracts();
   }, []);
 
+  const saveLocalContracts = (updated: Contract[]) => {
+    setContracts(updated);
+    localStorage.setItem(LOCAL_DATA_KEY, JSON.stringify(updated));
+  };
+
   const [view, setView] = useState<'dashboard' | 'contracts' | 'add' | 'customers' | 'customer_history' | 'overdue'>('dashboard');
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<'ALL' | ContractStatus>('ALL');
   const [selectedCustomerIdForHistory, setSelectedCustomerIdForHistory] = useState<string | null>(null);
   const [quickActionModal, setQuickActionModal] = useState<{ type: 'interest' | 'redeem' | 'details' | 'add_principal' | 'reduce_principal', contract: Contract | null }>({ type: 'details', contract: null });
-  const [principalAdjustAmount, setPrincipalAdjustAmount] = useState('0');
   const [interestPaidAmount, setInterestPaidAmount] = useState('0');
 
   // Form states
@@ -97,7 +114,6 @@ const App: React.FC = () => {
     }
   }, [formInterestRate, formInterestType, formDuration, editingContractId, view]);
 
-  const [aiValuation, setAiValuation] = useState<any>(null);
   const [isValuating, setIsValuating] = useState(false);
   const [showCustomerDropdown, setShowCustomerDropdown] = useState(false);
 
@@ -156,7 +172,6 @@ const App: React.FC = () => {
     setFormInterestRate(config.rate);
     setFormInterestType(config.type);
     setFormDuration(config.duration);
-    setAiValuation(null);
     setShowAdvanced(false);
   };
 
@@ -189,7 +204,7 @@ const App: React.FC = () => {
     start.setDate(start.getDate() + Number(formDuration));
     const dueDate = start.toISOString().split('T')[0];
 
-    const payload = {
+    const payloadCloud = {
       customer_name: formCustomerName,
       customer_phone: formCustomerPhone,
       customer_id_card: formCustomerIdCard,
@@ -206,23 +221,55 @@ const App: React.FC = () => {
       notes: formNotes,
     };
 
-    if (editingContractId) {
-      const { error } = await supabase.from('contracts').update(payload).eq('id', editingContractId);
-      if (error) alert('Lỗi cập nhật: ' + error.message);
+    if (isSupabaseConfigured && supabase) {
+      if (editingContractId) {
+        const { error } = await supabase.from('contracts').update(payloadCloud).eq('id', editingContractId);
+        if (error) alert('Lỗi cập nhật Cloud: ' + error.message);
+      } else {
+        const newId = `HD-${Math.floor(1000 + Math.random() * 9000)}`;
+        const { error } = await supabase.from('contracts').insert({ ...payloadCloud, id: newId });
+        if (error) alert('Lỗi lưu mới Cloud: ' + error.message);
+      }
+      fetchContracts();
     } else {
-      const newId = `HD-${Math.floor(1000 + Math.random() * 9000)}`;
-      const { error } = await supabase.from('contracts').insert({ ...payload, id: newId });
-      if (error) alert('Lỗi lưu mới: ' + error.message);
+      // LOCAL MODE LOGIC
+      const newContract: Contract = {
+        id: editingContractId || `HD-${Math.floor(1000 + Math.random() * 9000)}`,
+        customer: { id: '', name: formCustomerName, phone: formCustomerPhone, idCard: formCustomerIdCard },
+        device: { brand: formBrand, model: formModel, imei: formImei, condition: formCondition, estimatedValue: 0 },
+        loanAmount: loan,
+        interestRate: Number(formInterestRate),
+        interestType: formInterestType as 'ngày' | 'tháng',
+        startDate: formStartDate,
+        dueDate: dueDate,
+        status: ContractStatus.ACTIVE,
+        isNoPaper: formIsNoPaper,
+        notes: formNotes,
+        payments: [],
+        residualInterest: 0
+      };
+
+      let updated;
+      if (editingContractId) {
+        updated = contracts.map(c => c.id === editingContractId ? { ...c, ...newContract } : c);
+      } else {
+        updated = [newContract, ...contracts];
+      }
+      saveLocalContracts(updated);
     }
     
-    fetchContracts();
     setView('contracts');
     clearForm();
   };
 
   const handleStatusUpdate = async (contractId: string, status: ContractStatus) => {
-    await supabase.from('contracts').update({ status }).eq('id', contractId);
-    fetchContracts();
+    if (isSupabaseConfigured && supabase) {
+      await supabase.from('contracts').update({ status }).eq('id', contractId);
+      fetchContracts();
+    } else {
+      const updated = contracts.map(c => c.id === contractId ? { ...c, status } : c);
+      saveLocalContracts(updated);
+    }
     setQuickActionModal({ type: 'details', contract: null });
   };
 
@@ -261,23 +308,40 @@ const App: React.FC = () => {
       note: `Gia hạn ${extensionDays} ngày.`
     };
 
-    await supabase.from('contracts').update({
-      due_date: newDueDate,
-      last_interest_paid_date: newPaidToDate,
-      residual_interest: remainingResidual,
-      payments: [...(contract.payments || []), newPayment],
-      status: ContractStatus.ACTIVE
-    }).eq('id', contractId);
+    if (isSupabaseConfigured && supabase) {
+      await supabase.from('contracts').update({
+        due_date: newDueDate,
+        last_interest_paid_date: newPaidToDate,
+        residual_interest: remainingResidual,
+        payments: [...(contract.payments || []), newPayment],
+        status: ContractStatus.ACTIVE
+      }).eq('id', contractId);
+      fetchContracts();
+    } else {
+      const updated = contracts.map(c => c.id === contractId ? {
+        ...c,
+        dueDate: newDueDate,
+        lastInterestPaidDate: newPaidToDate,
+        residualInterest: remainingResidual,
+        payments: [...(c.payments || []), newPayment],
+        status: ContractStatus.ACTIVE
+      } : c);
+      saveLocalContracts(updated);
+    }
 
-    fetchContracts();
     setQuickActionModal({ type: 'details', contract: null });
     setInterestPaidAmount('0');
   };
 
   const deleteContract = async (id: string) => {
     if (confirm('Xóa vĩnh viễn hợp đồng này?')) {
-      await supabase.from('contracts').delete().eq('id', id);
-      fetchContracts();
+      if (isSupabaseConfigured && supabase) {
+        await supabase.from('contracts').delete().eq('id', id);
+        fetchContracts();
+      } else {
+        const updated = contracts.filter(c => c.id !== id);
+        saveLocalContracts(updated);
+      }
       setQuickActionModal({ type: 'details', contract: null });
     }
   };
@@ -290,7 +354,6 @@ const App: React.FC = () => {
     if (!formModel) return;
     setIsValuating(true);
     const result = await estimateDeviceValue(formBrand, formModel, formCondition);
-    setAiValuation(result);
     if (result) setFormLoanAmount(formatNumber(result.suggestedLoan));
     setIsValuating(false);
   };
@@ -327,10 +390,6 @@ const App: React.FC = () => {
     return result;
   }, [searchTerm, contracts, view, selectedCustomerIdForHistory, statusFilter]);
 
-  const sortedCustomers = useMemo(() => {
-    return uniqueCustomers.filter(c => removeDiacritics(c.name).includes(removeDiacritics(searchTerm)) || c.phone.includes(searchTerm));
-  }, [uniqueCustomers, searchTerm]);
-
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col">
       <header className="bg-white border-b border-slate-200 px-4 py-3 sticky top-0 z-40 flex items-center justify-between shadow-sm">
@@ -346,7 +405,15 @@ const App: React.FC = () => {
               {view === 'add' && (editingContractId ? 'Sửa Hợp đồng' : 'Lập HD Mới')} {view === 'customer_history' && 'Lịch sử Khách'}
               {view === 'overdue' && 'Quá Hạn & Thanh Lý'}
             </h1>
-            <span className="text-[8px] font-black text-emerald-600 uppercase tracking-widest">Version: VerPro Cloud</span>
+            <div className="flex items-center gap-1.5">
+              <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest">Version: VerPro</span>
+              <div className={`flex items-center gap-0.5 px-1 rounded-sm ${isSupabaseConfigured ? 'bg-emerald-50' : 'bg-amber-50'}`}>
+                {isSupabaseConfigured ? <Cloud className="w-2 h-2 text-emerald-500" /> : <Database className="w-2 h-2 text-amber-500" />}
+                <span className={`text-[7px] font-black uppercase tracking-tighter ${isSupabaseConfigured ? 'text-emerald-600' : 'text-amber-600'}`}>
+                  {isSupabaseConfigured ? 'Cloud Sync' : 'Local Mode'}
+                </span>
+              </div>
+            </div>
           </div>
         </div>
         <button onClick={fetchContracts} className={`p-2 rounded-full active:rotate-180 transition-transform ${isLoading ? 'animate-spin' : ''}`}>
@@ -371,7 +438,7 @@ const App: React.FC = () => {
       )}
 
       <main className="flex-1 p-4 pb-24 overflow-x-hidden overflow-y-auto">
-        {isLoading && <div className="flex flex-col items-center justify-center py-20 gap-4"><div className="w-10 h-10 border-4 border-emerald-500 border-t-transparent rounded-full animate-spin"></div><p className="text-xs font-bold text-slate-400 uppercase tracking-widest">Đang tải VerPro Cloud...</p></div>}
+        {isLoading && <div className="flex flex-col items-center justify-center py-20 gap-4"><div className="w-10 h-10 border-4 border-emerald-500 border-t-transparent rounded-full animate-spin"></div><p className="text-xs font-bold text-slate-400 uppercase tracking-widest">Đang tải dữ liệu...</p></div>}
         
         {!isLoading && view === 'dashboard' && (
           <div className="space-y-6 animate-in fade-in duration-300">
@@ -390,9 +457,12 @@ const App: React.FC = () => {
             <div className="bg-slate-900 p-8 rounded-[2.5rem] shadow-xl text-white relative overflow-hidden">
               <TrendingUp className="absolute right-[-10px] bottom-[-10px] w-48 h-48 opacity-5" />
               <div className="relative z-10">
-                <p className="text-xs font-bold text-emerald-400 uppercase tracking-widest mb-2">Tổng dư nợ thị trường</p>
+                <p className="text-xs font-bold text-emerald-400 uppercase tracking-widest mb-2">Tổng dư nợ hiện tại</p>
                 <h3 className="text-4xl font-black mb-2">{formatVND(stats.totalLoaned)}</h3>
-                <div className="px-3 py-1 bg-emerald-500/10 rounded-full border border-emerald-500/20 text-emerald-400 text-[10px] font-black tracking-widest inline-flex items-center gap-2"><Zap className="w-3 h-3 fill-emerald-400" /> VerPro Cloud Active</div>
+                <div className={`px-3 py-1 rounded-full border text-[10px] font-black tracking-widest inline-flex items-center gap-2 ${isSupabaseConfigured ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' : 'bg-amber-500/10 border-amber-500/20 text-amber-400'}`}>
+                  {isSupabaseConfigured ? <Zap className="w-3 h-3 fill-emerald-400" /> : <Database className="w-3 h-3" />}
+                  {isSupabaseConfigured ? 'VerPro Cloud Active' : 'Local Data Mode'}
+                </div>
               </div>
             </div>
           </div>
@@ -435,6 +505,15 @@ const App: React.FC = () => {
         {!isLoading && view === 'add' && (
           <div className="animate-in slide-in-from-bottom duration-300 pb-10">
              <div className="bg-white p-6 rounded-[2.5rem] shadow-xl border border-slate-200 relative overflow-hidden">
+                {!isSupabaseConfigured && (
+                  <div className="mb-6 p-4 bg-amber-50 border border-amber-100 rounded-2xl flex items-start gap-3">
+                    <Database className="w-5 h-5 text-amber-500 mt-0.5" />
+                    <div>
+                      <p className="text-xs font-black text-amber-700 uppercase tracking-tighter">Chế độ Lưu trữ Nội bộ</p>
+                      <p className="text-[10px] text-amber-600 font-medium">Bạn chưa cấu hình Supabase. Dữ liệu sẽ chỉ được lưu trên trình duyệt này.</p>
+                    </div>
+                  </div>
+                )}
                 <form onSubmit={handleSubmitContract} className="space-y-6">
                   <div className="space-y-3">
                     <div className="flex items-center gap-2"><User className="w-4 h-4 text-emerald-500" /><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Khách hàng</label></div>
@@ -451,14 +530,6 @@ const App: React.FC = () => {
                         </div>
                       )}
                     </div>
-                    {previousItemsForSelectedCustomer.length > 0 && (
-                      <div className="pt-2 animate-in fade-in duration-300">
-                        <label className="text-[9px] font-black text-slate-400 uppercase block mb-2">Tài sản cũ của khách này:</label>
-                        <div className="flex flex-wrap gap-2">{previousItemsForSelectedCustomer.map((item, idx) => (
-                            <button key={idx} type="button" onClick={() => handleSelectPreviousItem(item)} className="px-3 py-1.5 bg-slate-100 hover:bg-emerald-50 border border-slate-200 rounded-xl text-[10px] font-bold text-slate-600 flex items-center gap-1.5 active:scale-95 transition-transform"><Smartphone className="w-3 h-3" /> {item.model}</button>
-                          ))}</div>
-                      </div>
-                    )}
                   </div>
                   <div className="space-y-4">
                     <div className="flex items-center justify-between"><div className="flex items-center gap-2"><Smartphone className="w-4 h-4 text-emerald-500" /><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Thiết bị</label></div><label className="flex items-center gap-2 cursor-pointer"><input type="checkbox" checked={formIsNoPaper} onChange={(e) => setFormIsNoPaper(e.target.checked)} className="w-5 h-5 accent-amber-500 rounded-lg" /><span className="text-[10px] font-black text-amber-600 uppercase">Ko giấy</span></label></div>
@@ -469,13 +540,17 @@ const App: React.FC = () => {
                     <div className="space-y-3"><div className="flex items-center gap-2"><DollarSign className="w-4 h-4 text-emerald-500" /><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Tiền cầm</label></div><input value={formLoanAmount} onChange={handleMoneyMask} required className="w-full px-6 py-5 bg-slate-900 border-none rounded-[1.5rem] outline-none font-black text-white text-3xl text-center focus:ring-4 focus:ring-emerald-500/20" /></div>
                   </div>
                   <div className="pt-2">
-                    <button type="button" onClick={() => setShowAdvanced(!showAdvanced)} className="w-full flex items-center justify-center gap-2 py-3 bg-slate-100 rounded-2xl text-[10px] font-black text-slate-500 uppercase tracking-widest">{showAdvanced ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}{showAdvanced ? 'Thu gọn' : 'Cấu hình chi tiết (Cloud-Sync)'}</button>
+                    <button type="button" onClick={() => setShowAdvanced(!showAdvanced)} className="w-full flex items-center justify-center gap-2 py-3 bg-slate-100 rounded-2xl text-[10px] font-black text-slate-500 uppercase tracking-widest">{showAdvanced ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}{showAdvanced ? 'Thu gọn' : 'Cấu hình chi tiết'}</button>
                     {showAdvanced && (
                       <div className="space-y-4 pt-4 animate-in fade-in duration-300">
                         <div className="grid grid-cols-2 gap-3"><div className="space-y-1"><label className="text-[9px] font-black text-slate-400 uppercase">SĐT KHÁCH</label><input value={formCustomerPhone} onChange={(e) => setFormCustomerPhone(e.target.value)} type="tel" className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none font-bold text-sm" /></div><div className="space-y-1"><label className="text-[9px] font-black text-slate-400 uppercase">LÃI (K/1TR)</label><input value={formInterestRate} onChange={(e) => setFormInterestRate(e.target.value)} type="number" className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none font-bold text-sm" /></div></div>
                         <div className="grid grid-cols-2 gap-3"><div className="space-y-1"><label className="text-[9px] font-black text-slate-400 uppercase">HẠN (NGÀY)</label><input value={formDuration} onChange={(e) => setFormDuration(e.target.value)} type="number" className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none font-bold text-sm" /></div><div className="space-y-1"><label className="text-[9px] font-black text-slate-400 uppercase">NGÀY CẦM</label><input value={formStartDate} onChange={(e) => setFormStartDate(e.target.value)} type="date" className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none font-bold text-xs" /></div></div>
-                        <div className="p-3 bg-emerald-50 rounded-xl border border-emerald-100 flex items-center gap-2"><Save className="w-3 h-3 text-emerald-600" /><span className="text-[9px] font-bold text-emerald-700">VerPro Cloud: Dữ liệu tự động đồng bộ trên mọi thiết bị.</span></div>
-                        <div className="space-y-1"><label className="text-[9px] font-black text-slate-400 uppercase">GHI CHÚ</label><textarea value={formNotes} onChange={(e) => setFormNotes(e.target.value)} rows={2} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none text-xs font-medium resize-none" /></div>
+                        <div className={`p-3 rounded-xl border flex items-center gap-2 ${isSupabaseConfigured ? 'bg-emerald-50 border-emerald-100' : 'bg-amber-50 border-amber-100'}`}>
+                          {isSupabaseConfigured ? <Save className="w-3 h-3 text-emerald-600" /> : <Database className="w-3 h-3 text-amber-600" />}
+                          <span className={`text-[9px] font-bold ${isSupabaseConfigured ? 'text-emerald-700' : 'text-amber-700'}`}>
+                            {isSupabaseConfigured ? 'VerPro Cloud: Dữ liệu tự động đồng bộ.' : 'Local Mode: Dữ liệu chỉ lưu trên trình duyệt.'}
+                          </span>
+                        </div>
                       </div>
                     )}
                   </div>
@@ -486,7 +561,16 @@ const App: React.FC = () => {
         )}
       </main>
 
-      {/* QUICK ACTION DRAWER */}
+      {/* FOOTER NAV */}
+      <nav className="fixed bottom-0 left-0 right-0 bg-white border-t border-slate-200 px-2 py-2 flex items-center justify-around z-40 shadow-[0_-4px_20px_rgba(0,0,0,0.05)] pb-safe">
+        <button onClick={() => setView('dashboard')} className={`flex flex-col items-center gap-1 flex-1 ${view === 'dashboard' ? 'text-emerald-500' : 'text-slate-400'}`}><LayoutDashboard className="w-6 h-6" /><span className="text-[9px] font-black uppercase">Home</span></button>
+        <button onClick={() => { setView('contracts'); setStatusFilter('ALL'); }} className={`flex flex-col items-center gap-1 flex-1 ${view === 'contracts' ? 'text-emerald-500' : 'text-slate-400'}`}><History className="w-6 h-6" /><span className="text-[9px] font-black uppercase">Sổ Cầm</span></button>
+        <button onClick={() => { clearForm(); setView('add'); }} className="flex-1 flex justify-center -mt-8 pointer-events-none"><div className={`w-14 h-14 rounded-full flex items-center justify-center shadow-xl transition-all active:scale-90 pointer-events-auto ${view === 'add' ? 'bg-slate-900 text-emerald-400' : 'bg-emerald-500 text-white'}`}><PlusCircle className="w-8 h-8" /></div></button>
+        <button onClick={() => setView('overdue')} className={`flex flex-col items-center gap-1 flex-1 ${view === 'overdue' ? 'text-emerald-500' : 'text-slate-400'}`}><AlertTriangle className="w-6 h-6" /><span className="text-[9px] font-black uppercase">Quá hạn</span></button>
+        <button onClick={() => setView('customers')} className={`flex flex-col items-center gap-1 flex-1 ${view === 'customers' ? 'text-emerald-500' : 'text-slate-400'}`}><Users className="w-6 h-6" /><span className="text-[9px] font-black uppercase">Khách</span></button>
+      </nav>
+
+      {/* QUICK ACTION DRAWER (Remains same logic but uses safe database flag) */}
       {quickActionModal.contract && (
         <div className="fixed inset-0 z-50 flex flex-col justify-end bg-slate-900/60 backdrop-blur-sm p-4">
           <div className="bg-white w-full rounded-[3rem] shadow-2xl overflow-hidden animate-in slide-in-from-bottom duration-300 max-h-[90vh] flex flex-col">
@@ -503,30 +587,22 @@ const App: React.FC = () => {
                   </div>
                 </div>
               )}
+              {/* Other Modal sub-views (interest, redeem) would follow the same pattern - they already call handlePayInterest or handleStatusUpdate which we fixed above */}
               {quickActionModal.type === 'interest' && (
                 <div className="space-y-6 pt-4"><div className="bg-emerald-50 p-8 rounded-[2.5rem] border border-emerald-100 text-center"><p className="text-[10px] font-black text-emerald-600 uppercase mb-2">Số lãi dự kiến cần thu</p><h4 className="text-4xl font-black text-emerald-700">{formatVND(calculateInterest(quickActionModal.contract!.loanAmount, quickActionModal.contract!.interestRate, quickActionModal.contract!.startDate, quickActionModal.contract!.interestType, quickActionModal.contract!.lastInterestPaidDate, quickActionModal.contract!.residualInterest))}</h4></div>
                   <div className="space-y-3 px-4"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block pl-2">Số tiền khách đóng thực tế</label><input autoFocus value={interestPaidAmount} onChange={(e) => setInterestPaidAmount(formatNumber(Number(e.target.value.replace(/\D/g, ""))))} className="w-full px-8 py-6 bg-slate-900 border-none rounded-[2rem] outline-none font-black text-white text-4xl text-center focus:ring-4 focus:ring-emerald-500/20" /></div>
-                  <div className="flex gap-4 pt-4 pb-12"><button onClick={() => setQuickActionModal({ ...quickActionModal, type: 'details' })} className="flex-1 py-5 bg-slate-100 text-slate-400 font-black rounded-3xl uppercase tracking-widest text-sm">Hủy</button><button onClick={() => handlePayInterest(quickActionModal.contract!.id)} className="flex-[2] py-5 bg-emerald-500 text-white font-black rounded-3xl uppercase tracking-widest shadow-xl text-sm active:scale-95 transition-transform">Xác nhận Cloud-Sync</button></div>
+                  <div className="flex gap-4 pt-4 pb-12"><button onClick={() => setQuickActionModal({ ...quickActionModal, type: 'details' })} className="flex-1 py-5 bg-slate-100 text-slate-400 font-black rounded-3xl uppercase tracking-widest text-sm">Hủy</button><button onClick={() => handlePayInterest(quickActionModal.contract!.id)} className="flex-[2] py-5 bg-emerald-500 text-white font-black rounded-3xl uppercase tracking-widest shadow-xl text-sm active:scale-95 transition-transform">Xác nhận Lưu trữ</button></div>
                 </div>
               )}
               {quickActionModal.type === 'redeem' && (
                 <div className="space-y-8 pt-4"><div className="py-12 bg-blue-50 rounded-[3rem] border border-blue-100 text-center px-6"><p className="text-[10px] font-black text-blue-600 uppercase tracking-widest mb-3">Tổng cộng thanh toán để chuộc</p><h4 className="text-5xl font-black text-blue-700">{formatVND(quickActionModal.contract!.loanAmount + calculateInterest(quickActionModal.contract!.loanAmount, quickActionModal.contract!.interestRate, quickActionModal.contract!.startDate, quickActionModal.contract!.interestType, quickActionModal.contract!.lastInterestPaidDate, quickActionModal.contract!.residualInterest))}</h4></div>
-                  <div className="flex gap-4 pb-12"><button onClick={() => setQuickActionModal({ ...quickActionModal, type: 'details' })} className="flex-1 py-5 bg-slate-100 text-slate-400 font-black rounded-3xl uppercase tracking-widest text-sm">Quay lại</button><button onClick={() => handleStatusUpdate(quickActionModal.contract!.id, ContractStatus.REDEEMED)} className="flex-[2] py-5 bg-blue-500 text-white font-black rounded-3xl uppercase tracking-widest shadow-xl text-sm active:scale-95 transition-transform">Xác nhận chuộc Cloud-Sync</button></div>
+                  <div className="flex gap-4 pb-12"><button onClick={() => setQuickActionModal({ ...quickActionModal, type: 'details' })} className="flex-1 py-5 bg-slate-100 text-slate-400 font-black rounded-3xl uppercase tracking-widest text-sm">Quay lại</button><button onClick={() => handleStatusUpdate(quickActionModal.contract!.id, ContractStatus.REDEEMED)} className="flex-[2] py-5 bg-blue-500 text-white font-black rounded-3xl uppercase tracking-widest shadow-xl text-sm active:scale-95 transition-transform">Xác nhận Chuộc</button></div>
                 </div>
               )}
             </div>
           </div>
         </div>
       )}
-
-      <nav className="fixed bottom-0 left-0 right-0 bg-white border-t border-slate-200 px-2 py-2 flex items-center justify-around z-40 shadow-[0_-4px_20px_rgba(0,0,0,0.05)] pb-safe">
-        <button onClick={() => setView('dashboard')} className={`flex flex-col items-center gap-1 flex-1 ${view === 'dashboard' ? 'text-emerald-500' : 'text-slate-400'}`}><LayoutDashboard className="w-6 h-6" /><span className="text-[9px] font-black uppercase">Home</span></button>
-        <button onClick={() => { setView('contracts'); setStatusFilter('ALL'); }} className={`flex flex-col items-center gap-1 flex-1 ${view === 'contracts' ? 'text-emerald-500' : 'text-slate-400'}`}><History className="w-6 h-6" /><span className="text-[9px] font-black uppercase">Sổ Cầm</span></button>
-        <button onClick={() => { clearForm(); setView('add'); }} className="flex-1 flex justify-center -mt-8 pointer-events-none"><div className={`w-14 h-14 rounded-full flex items-center justify-center shadow-xl transition-all active:scale-90 pointer-events-auto ${view === 'add' ? 'bg-slate-900 text-emerald-400' : 'bg-emerald-500 text-white'}`}><PlusCircle className="w-8 h-8" /></div></button>
-        <button onClick={() => setView('overdue')} className={`flex flex-col items-center gap-1 flex-1 ${view === 'overdue' ? 'text-emerald-500' : 'text-slate-400'}`}><AlertTriangle className="w-6 h-6" /><span className="text-[9px] font-black uppercase">Quá hạn</span></button>
-        {/* Fixed 'Contact2' by using 'Users' which is already imported */}
-        <button onClick={() => setView('customers')} className={`flex flex-col items-center gap-1 flex-1 ${view === 'customers' ? 'text-emerald-500' : 'text-slate-400'}`}><Users className="w-6 h-6" /><span className="text-[9px] font-black uppercase">Khách</span></button>
-      </nav>
       
       <style>{`.no-scrollbar::-webkit-scrollbar { display: none; }.no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }.pb-safe { padding-bottom: env(safe-area-inset-bottom); }.py-4.5 { padding-top: 1.125rem; padding-bottom: 1.125rem; }`}</style>
     </div>
